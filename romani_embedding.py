@@ -29,14 +29,101 @@ CBOW_MIN_COUNT = 5
 CBOW_EPOCHS = 10
 
 # Извлечение текста
+# def extract_pdf(path):
+#     text = ""
+#     with pdfplumber.open(path) as pdf:
+#         for page in pdf.pages:
+#             t = page.extract_text()
+#             if t:
+#                 text += t + "\n"
+#     return text
 def extract_pdf(path):
+    """
+    Извлечение текста из PDF с восстановлением структуры предложений.
+    """
+    # Признаки служебных строк (типографские пометки)
+    SERVICE_PATTERNS = [
+        r'учгиз', r'учпедгиз', r'типография', r'печат', r'набор',
+        r'тираж', r'заказ', r'бумага', r'бум\s*л', r'печ\s*л',
+        r'редактор', r'корректор', r'подписана', r'сдана',
+        r'глазлита', r'уполн', r'формат', r'знак\s*на',
+        r'^\d+$', r'^\d+[-–]\d+$', 
+        r'^[IVXLC]+$',  
+        r'^-\w{1,2}$',
+        r'кочетков.*дружына',            
+        r'^[а-яё]\s[а-яё]\s[а-яё]\s[а-яё]',
+        r'москва\s+им$',             
+        r'цыг$',            
+    ]
+    
     text = ""
     with pdfplumber.open(path) as pdf:
         for page in pdf.pages:
-            t = page.extract_text()
-            if t:
-                text += t + "\n"
-    return text
+            words = page.extract_words(
+                keep_blank_chars=True,
+                use_text_flow=False,
+                extra_attrs=['size']
+            )
+            
+            if not words:
+                continue
+            
+            lines = []
+            current_line = []
+            current_y = None
+            
+            for word in words:
+                y = round(word['top'], 1)
+                
+                if current_y is None:
+                    current_y = y
+                
+                if abs(y - current_y) > 3:
+                    if current_line:
+                        lines.append(current_line)
+                    current_line = [word['text']]
+                    current_y = y
+                else:
+                    current_line.append(word['text'])
+            
+            if current_line:
+                lines.append(current_line)
+            page_text = []
+            skip_next = False
+            
+            for i, line in enumerate(lines):
+                line_text = ' '.join(line)
+                is_service = False
+                for pattern in SERVICE_PATTERNS:
+                    if re.search(pattern, line_text, re.IGNORECASE):
+                        is_service = True
+                        break
+                if len(line_text.strip()) <= 2:
+                    is_service = True
+                
+                if is_service:
+                    skip_next = True
+                    continue
+                if line_text.endswith('-') and i + 1 < len(lines):
+                    continue
+                if i > 0 and ' '.join(lines[i - 1]).endswith('-'):
+                    prev = page_text.pop() if page_text else ''
+                    line_text = prev.rstrip('-') + line_text
+                if line_text and line_text[-1] in '.!?…':
+                    page_text.append(line_text + '\n')
+                else:
+                    page_text.append(line_text)
+            
+            text += ' '.join(page_text) + '\n'
+
+    text = re.sub(r'(\w+)-\s+(\w+)', r'\1\2', text)  
+    text = re.sub(r'\s-\w{1,2}\s', ' ', text)         
+    text = re.sub(r'\s+\w\s+', ' ', text)              
+    text = re.sub(r'\s+', ' ', text)                   
+    text = re.sub(r'\n\s+', '\n', text)
+    text = re.sub(r'\s+\n', '\n', text)
+    text = re.sub(r'\n{3,}', '\n\n', text)            
+    return text.strip()
 
 def extract_txt(path):
     for enc in ["utf-8", "cp1251", "latin-1", "utf-16"]:
@@ -62,58 +149,6 @@ def extract_all_texts(folder):
             texts[name] = extract_txt(path)
     
     return texts
-def reconstruct_text(text):
-    """
-    Восстанавливает текст после извлечения из PDF:
-    """
-    # Удаляем строки-мусор (короткие, с цифрами, служебные)
-    lines = text.split('\n')
-    clean_lines = []
-    for line in lines:
-        line = line.strip()
-        if re.search(r'учгиз|типография|заказ|тираж|бум\s*л|печат|набор|уполн|глазлита|редактор|корректор', line.lower()):
-            continue
-        if re.match(r'^[\d\s\-\.\.,;:]+$', line):
-            continue
-        if len(line.split()) <= 1:
-            continue
-        clean_lines.append(line)
-    # Склеиваем слова, разорванные переносами
-    text = ' '.join(clean_lines)
-    text = re.sub(r'(\w+)-\s+(\w+)', r'\1\2', text)
-    text = re.sub(r'(\w)-\s+', r'\1', text)
-    text = re.sub(r'\s+', ' ', text).strip()
-    
-    # Ищем границы предложений
-    sentence_starters = [
-        'со', 'а', 'но', 'адава', 'када', 'ода', 'дрэ', 'прэ', 'пал',
-        'кай', 'сав', 'савэ', 'сар', 'ко', 'кон', 'ваш', 'анда', 'андэ',
-        'сыр', 'кана', 'вай', 'даже', 'хотя', 'если', 'так', 'тогда',
-        'потом', 'после', 'перед', 'вов', 'адал', 'ада', 'када',
-        'ёв', 'ёне', 'амэ', 'тумэ', 'мэ', 'ту', 'ой',
-        'сыс', 'заг','уджя','ачё','дыкх','шун','пхэн','мар',
-        'пэрв', 'дуйт', 'трит',
-    ]
-    
-    # Расставляем точки перед "начальными" словами
-    words = text.split()
-    result = []
-    
-    for i, word in enumerate(words):
-        if (i > 0 and 
-            word.lower() in sentence_starters and 
-            len(words[i-1]) > 2 and  # предыдущее слово не предлог
-            not words[i-1].endswith(',') and
-            not words[i-1].lower() in {'и', 'а', 'но', 'да', 'та', 'тэ'}):
-            result.append('.')
-        result.append(word)
-    
-    text = ' '.join(result)
-    text = re.sub(r'\s*\.\s+', '.\n', text)
-    text = re.sub(r'\b\w\b\s+', '', text)
-    text = re.sub(r'\n\s*\n', '\n', text)  # убираем пустые строки
-    text = re.sub(r'\.+', '.', text)       # убираем множественные точки
-    return text
 
 def save_raw_corpus(texts_dict, output_folder=RAW_FOLDER):
     os.makedirs(output_folder, exist_ok=True)
@@ -130,7 +165,6 @@ def clean_text(text):
     text = re.sub(r"\s'|'\s|^-|-$", ' ', text)
     text = re.sub(r'\s+', ' ', text).strip()
     return text
-
 
 def lemmatize_text(text):
     """
@@ -165,16 +199,14 @@ def lemmatize_text(text):
     
     return ' '.join(lemmatized)
 
-
 def process_texts(raw_texts):
+    """Очистка и лемматизация всех текстов"""
     processed = {}
-    for name, text in raw_texts.items():
-        reconstructed = reconstruct_text(text)
-        cleaned = clean_text(reconstructed)
+    for name, text in tqdm(raw_texts.items(), desc="Обработка"):
+        cleaned = clean_text(text)
         lemmatized = lemmatize_text(cleaned)
         processed[name] = lemmatized
     return processed
-
 
 def split_sentences(text):
     """Разбивка текста на предложения"""
@@ -296,22 +328,38 @@ def visualize(df=None, cbow_model=None, words_to_plot=None):
 
 def main():
     raw_texts = extract_all_texts(SOURCE_FOLDER)
-    save_raw_corpus(raw_texts)
+    save_raw_corpus(raw_texts, RAW_FOLDER)
+    all_raw_sentences = []
+    for name, text in raw_texts.items():
+        sentences = split_sentences(text)
+        all_raw_sentences.extend(sentences)
     processed = process_texts(raw_texts)
+    
+    # Корпус для SVD
     all_processed = "\n".join(processed.values())
     with open(CORPUS_FILE, "w", encoding="utf-8") as f:
         f.write(all_processed)
-    all_sentences = []
-    for text in processed.values():
-        all_sentences.extend(split_sentences(text))
+    
+    # Корпус для CBoW
+    cbow_sentences = []
+    for sent in all_raw_sentences:
+        cleaned = clean_text(sent)
+        if len(cleaned.split()) > 1:
+            lemmatized = lemmatize_text(cleaned)
+            cbow_sentences.append(lemmatized)
+    
     with open(CBOW_SENTENCES_FILE, "w", encoding="utf-8") as f:
-        for sent in all_sentences:
+        for sent in cbow_sentences:
             f.write(sent + "\n")
+    
+    # Статистика
     total_raw = sum(len(t.split()) for t in raw_texts.values())
     total_proc = sum(len(t.split()) for t in processed.values())
     print(f"Слов до обработки: {total_raw}, после: {total_proc}")
     words, vocab, w2id, matrix = build_ngram_matrix(all_processed)
     svd, df_emb = train_svd(matrix, vocab)
+    
+    # Сохранение SVD
     with open(SVD_MODEL_FILE, 'wb') as f:
         pickle.dump({'svd': svd, 'embeddings': df_emb, 'word_to_id': w2id}, f)
     df_emb.to_csv(EMBEDDINGS_CSV)
@@ -319,28 +367,27 @@ def main():
     print("Топ-15 слов:")
     for i, (w, c) in enumerate(Counter(words).most_common(15), 1):
         print(f"  {i:2d}. {w:15s} ({c})")
-    # Примеры похожих слов
+    
+    # Примеры похожих слов SVD
     print("Семантические соседи (SVD):")
     for w in list(vocab[:5]):
         sim = find_similar(w, df_emb, top_n=5)
         if sim:
             print(f"  {w}: {', '.join(f'{s[0]}({s[1]:.3f})' for s in sim)}")
-    cbow_model = train_cbow(all_sentences)
+    cbow_model = train_cbow(cbow_sentences)
     cbow_model.save(CBOW_MODEL_FILE)
     cbow_model.wv.save_word2vec_format(
         CBOW_MODEL_FILE.replace('.bin', '.txt'), binary=False
     )
-    # Примеры похожих слов
+    # Примеры похожих слов CBoW
     print("Семантические соседи (CBoW):")
     for w in cbow_model.wv.index_to_key[:5]:
-        try:
-            sim = cbow_model.wv.most_similar(w, topn=5)
-            print(f"  {w}: {', '.join(f'{s[0]}({s[1]:.3f})' for s in sim)}")
-        except KeyError:
-            pass
+        sim = cbow_model.wv.most_similar(w, topn=5)
+        print(f"  {w}: {', '.join(f'{s[0]}({s[1]:.3f})' for s in sim)}")
     top_words = [w for w, _ in Counter(words).most_common(20)]
     visualize(df_emb, words_to_plot=top_words)
     visualize(cbow_model=cbow_model, 
-                 words_to_plot=cbow_model.wv.index_to_key[:20])
+             words_to_plot=cbow_model.wv.index_to_key[:20])
+
 if __name__ == "__main__":
     main()

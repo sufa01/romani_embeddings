@@ -244,6 +244,7 @@ def visualize(df=None, cbow_model=None, words_to_plot=None):
 
 def main():
     raw_texts = extract_all_texts(SOURCE_FOLDER)
+    save_raw_corpus(raw_texts)
     processed = process_texts(raw_texts)
     all_processed = "\n".join(processed.values())
     with open(CORPUS_FILE, "w", encoding="utf-8") as f:

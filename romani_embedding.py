@@ -62,6 +62,58 @@ def extract_all_texts(folder):
             texts[name] = extract_txt(path)
     
     return texts
+def reconstruct_text(text):
+    """
+    Восстанавливает текст после извлечения из PDF:
+    """
+    # Удаляем строки-мусор (короткие, с цифрами, служебные)
+    lines = text.split('\n')
+    clean_lines = []
+    for line in lines:
+        line = line.strip()
+        if re.search(r'учгиз|типография|заказ|тираж|бум\s*л|печат|набор|уполн|глазлита|редактор|корректор', line.lower()):
+            continue
+        if re.match(r'^[\d\s\-\.\.,;:]+$', line):
+            continue
+        if len(line.split()) <= 1:
+            continue
+        clean_lines.append(line)
+    # Склеиваем слова, разорванные переносами
+    text = ' '.join(clean_lines)
+    text = re.sub(r'(\w+)-\s+(\w+)', r'\1\2', text)
+    text = re.sub(r'(\w)-\s+', r'\1', text)
+    text = re.sub(r'\s+', ' ', text).strip()
+    
+    # Ищем границы предложений
+    sentence_starters = [
+        'со', 'а', 'но', 'адава', 'када', 'ода', 'дрэ', 'прэ', 'пал',
+        'кай', 'сав', 'савэ', 'сар', 'ко', 'кон', 'ваш', 'анда', 'андэ',
+        'сыр', 'кана', 'вай', 'даже', 'хотя', 'если', 'так', 'тогда',
+        'потом', 'после', 'перед', 'вов', 'адал', 'ада', 'када',
+        'ёв', 'ёне', 'амэ', 'тумэ', 'мэ', 'ту', 'ой',
+        'сыс', 'заг','уджя','ачё','дыкх','шун','пхэн','мар',
+        'пэрв', 'дуйт', 'трит',
+    ]
+    
+    # Расставляем точки перед "начальными" словами
+    words = text.split()
+    result = []
+    
+    for i, word in enumerate(words):
+        if (i > 0 and 
+            word.lower() in sentence_starters and 
+            len(words[i-1]) > 2 and  # предыдущее слово не предлог
+            not words[i-1].endswith(',') and
+            not words[i-1].lower() in {'и', 'а', 'но', 'да', 'та', 'тэ'}):
+            result.append('.')
+        result.append(word)
+    
+    text = ' '.join(result)
+    text = re.sub(r'\s*\.\s+', '.\n', text)
+    text = re.sub(r'\b\w\b\s+', '', text)
+    text = re.sub(r'\n\s*\n', '\n', text)  # убираем пустые строки
+    text = re.sub(r'\.+', '.', text)       # убираем множественные точки
+    return text
 
 def save_raw_corpus(texts_dict, output_folder=RAW_FOLDER):
     os.makedirs(output_folder, exist_ok=True)
@@ -115,10 +167,10 @@ def lemmatize_text(text):
 
 
 def process_texts(raw_texts):
-    """Очистка и лемматизация всех текстов"""
     processed = {}
-    for name, text in tqdm(raw_texts.items(), desc="Обработка"):
-        cleaned = clean_text(text)
+    for name, text in raw_texts.items():
+        reconstructed = reconstruct_text(text)
+        cleaned = clean_text(reconstructed)
         lemmatized = lemmatize_text(cleaned)
         processed[name] = lemmatized
     return processed
